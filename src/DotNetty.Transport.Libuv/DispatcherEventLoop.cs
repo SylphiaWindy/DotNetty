@@ -14,7 +14,7 @@ namespace DotNetty.Transport.Libuv
     sealed class DispatcherEventLoop : LoopExecutor, IEventLoop
     {
         PipeListener pipeListener;
-        IServerNativeUnsafe nativeUnsafe;
+        TcpServerChannel.IServerNativeUnsafe nativeUnsafe;
 
         internal DispatcherEventLoop(IEventLoopGroup parent, string threadName = null)
             : base(parent, threadName)
@@ -22,14 +22,15 @@ namespace DotNetty.Transport.Libuv
             Contract.Requires(parent != null);
 
             string pipeName = "DotNetty_" + Guid.NewGuid().ToString("n");
-            this.PipeName = (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) 
-                ? @"\\.\pipe\" : "/tmp/") + pipeName;
+            this.PipeName = (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? @"\\.\pipe\"
+                : "/tmp/") + pipeName;
             this.Start();
         }
 
         internal string PipeName { get; }
 
-        internal void Register(IServerNativeUnsafe serverChannel)
+        internal void Register(TcpServerChannel.IServerNativeUnsafe serverChannel)
         {
             Debug.Assert(serverChannel != null);
             this.nativeUnsafe = serverChannel;
@@ -62,6 +63,8 @@ namespace DotNetty.Transport.Libuv
         }
 
         internal void Accept(NativeHandle handle) => this.nativeUnsafe.Accept(handle);
+
+        public new IEventLoop GetNext() => (IEventLoop)base.GetNext();
 
         public Task RegisterAsync(IChannel channel) => channel.Unsafe.RegisterAsync(this);
 

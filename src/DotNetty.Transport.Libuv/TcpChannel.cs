@@ -5,19 +5,13 @@
 namespace DotNetty.Transport.Libuv
 {
     using System;
-    using System.Collections.Generic;
     using System.Net;
-    using DotNetty.Buffers;
-    using DotNetty.Common;
     using DotNetty.Transport.Channels;
     using DotNetty.Transport.Libuv.Native;
 
     public sealed class TcpChannel : NativeChannel
     {
-        static readonly ThreadLocalPool<WriteRequest> Pool = new ThreadLocalPool<WriteRequest>(handle => new WriteRequest(handle));
         static readonly ChannelMetadata TcpMetadata = new ChannelMetadata(false);
-
-        static readonly Action<object> FlushAction = c => ((TcpChannel)c).Flush();
 
         readonly TcpChannelConfig config;
         Tcp tcp;
@@ -142,143 +136,13 @@ namespace DotNetty.Transport.Libuv
 
         protected override void DoWrite(ChannelOutboundBuffer input)
         {
-            List<ArraySegment<byte>> sharedBufferList = null;
-            try
+            if (input.Size > 0)
             {
-                while (true)
-                {
-                    int size = input.Count;
-                    if (size == 0)
-                    {
-                        // All written
-                        break;
-                    }
-                    long writtenBytes = 0;
-                    bool done = false;
-
-                    // Ensure the pending writes are made of ByteBufs only.
-                    sharedBufferList = input.GetSharedBufferList();
-                    int nioBufferCnt = sharedBufferList.Count;
-                    long expectedWrittenBytes = input.NioBufferSize;
-                    switch (nioBufferCnt)
-                    {
-                        case 0:
-                            this.DoWrite0(input);
-                            return;
-                        case 1:
-                            {
-                                ArraySegment<byte> nioBuffer = sharedBufferList[0];
-                                WriteRequest request = Pool.Take();
-                                int localWrittenBytes = request.Prepare((TcpChannelUnsafe)this.Unsafe, nioBuffer);
-                                this.tcp.Write(request);
-
-                                expectedWrittenBytes -= localWrittenBytes;
-                                writtenBytes += localWrittenBytes;
-                                if (expectedWrittenBytes == 0)
-                                {
-                                    done = true;
-                                }
-                            }
-                            break;
-                        default:
-                            for (int i = this.Configuration.WriteSpinCount - 1; i >= 0; i--)
-                            {
-                                WriteRequest request = Pool.Take();
-                                int localWrittenBytes = request.Prepare((TcpChannelUnsafe)this.Unsafe, sharedBufferList);
-                                this.tcp.Write(request);
-
-                                expectedWrittenBytes -= localWrittenBytes;
-                                writtenBytes += localWrittenBytes;
-                                if (expectedWrittenBytes == 0)
-                                {
-                                    done = true;
-                                    break;
-                                }
-                            }
-                            break;
-                    }
-
-                    input.RemoveBytes(writtenBytes);
-                    if (!done)
-                    {
-                        // Flush later
-                        this.EventLoop.Execute(FlushAction, this);
-                        break;
-                    }
-                }
+                this.SetState(StateFlags.WriteScheduled);
+                var loopExecutor = (LoopExecutor)this.EventLoop;
+                WriteRequest request = loopExecutor.WriteRequestPool.Take();
+                request.DoWrite((TcpChannelUnsafe)this.Unsafe, input);
             }
-            finally
-            {
-                sharedBufferList?.Clear();
-            }
-        }
-
-        // Non gathering writes
-        void DoWrite0(ChannelOutboundBuffer input)
-        {
-            int writeSpinCount = -1;
-            while (true)
-            {
-                object msg = input.Current;
-                if (msg == null)
-                {
-                    // Wrote all messages.
-                    break;
-                }
-
-                if (msg is IByteBuffer buf)
-                {
-                    int readableBytes = buf.ReadableBytes;
-                    if (readableBytes == 0)
-                    {
-                        input.Remove();
-                        continue;
-                    }
-
-                    bool done = false;
-                    long flushedAmount = 0;
-                    if (writeSpinCount == -1)
-                    {
-                        writeSpinCount = this.Configuration.WriteSpinCount;
-                    }
-
-                    for (int i = writeSpinCount - 1; i >= 0; i--)
-                    {
-                        flushedAmount += this.WriteBytes(buf);
-                        if (!buf.IsReadable())
-                        {
-                            done = true;
-                            break;
-                        }
-                    }
-
-                    input.Progress(flushedAmount);
-                    if (done)
-                    {
-                        input.Remove();
-                    }
-                    else
-                    {
-                        this.EventLoop.Execute(FlushAction, this);
-                        break;
-                    }
-                }
-                else
-                {
-                    // Should not reach here.
-                    throw new InvalidOperationException();
-                }
-            }
-        }
-
-        int WriteBytes(IByteBuffer buf)
-        {
-            WriteRequest writeRequest = Pool.Take();
-            int totalBytes = writeRequest.Prepare((TcpChannelUnsafe)this.Unsafe, buf);
-            this.tcp.Write(writeRequest);
-
-            buf.SetReaderIndex(buf.ReaderIndex + totalBytes);
-            return totalBytes;
         }
 
         sealed class TcpChannelUnsafe : NativeChannelUnsafe

@@ -35,10 +35,10 @@ namespace DotNetty.Transport.Libuv.Tests
             Bootstrap cb = new Bootstrap()
                 .Group(this.group)
                 .Channel<TcpChannel>();
-            this.BufRelease(sb, cb);
+            this.BufRelease0(sb, cb);
         }
 
-        void BufRelease(ServerBootstrap sb, Bootstrap cb)
+        void BufRelease0(ServerBootstrap sb, Bootstrap cb)
         {
             var serverHandler = new BufWriterHandler();
             var clientHandler = new BufWriterHandler();
@@ -117,6 +117,7 @@ namespace DotNetty.Transport.Libuv.Tests
                 Assert.True(this.writeTask.Wait(DefaultTimeout), "Write task timed out");
                 Assert.Equal(1, this.buf.ReferenceCount);
             }
+
             public void Release()
             {
                 this.buf.Release();
